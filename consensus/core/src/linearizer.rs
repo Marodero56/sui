@@ -41,13 +41,14 @@ impl Linearizer {
         let mut buffer = vec![leader_block];
         assert!(committed.insert(leader_block_ref));
 
-        let dag_state = self.dag_state.read();
         while let Some(x) = buffer.pop() {
             to_commit.push(x.clone());
 
-            let ancestors: Vec<VerifiedBlock> = dag_state
-                .get_uncommitted_blocks(
-                    x.ancestors()
+            let ancestors: Vec<VerifiedBlock> = self
+                .dag_state
+                .read()
+                .get_blocks(
+                    &x.ancestors()
                         .iter()
                         .copied()
                         .filter(|ancestor| {
@@ -58,6 +59,7 @@ impl Linearizer {
                         })
                         .collect::<Vec<_>>(),
                 )
+                .unwrap_or_else(|e| panic!("Failed to get ancestors: {:?}", e))
                 .into_iter()
                 .map(|ancestor_opt| {
                     ancestor_opt.expect("We should have all uncommitted blocks in dag state.")

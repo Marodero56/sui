@@ -200,8 +200,9 @@ impl BaseCommitter {
             let ancestor = self
                 .dag_state
                 .read()
-                .get_uncommitted_block(ancestor)
-                .expect("We should have the whole sub-dag by now");
+                .get_block(ancestor)
+                .unwrap_or_else(|e| panic!("Error reading block: {}", e))
+                .unwrap_or_else(|| panic!("Block not found in storage: {:?}", ancestor));
             if let Some(support) = self.find_supported_block(leader_slot, &ancestor) {
                 return Some(support);
             }
@@ -237,8 +238,9 @@ impl BaseCommitter {
                 let potential_vote = self
                     .dag_state
                     .read()
-                    .get_uncommitted_block(reference)
-                    .expect("We should have the whole sub-dag by now");
+                    .get_block(reference)
+                    .unwrap_or_else(|e| panic!("Error reading block: {}", e))
+                    .unwrap_or_else(|| panic!("Block not found in storage: {:?}", reference));
                 let is_vote = self.is_vote(&potential_vote, leader_block);
                 all_votes.insert(*reference, is_vote);
                 is_vote
