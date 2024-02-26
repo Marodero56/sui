@@ -7,5 +7,5 @@ publish = false
 
 [dependencies]
 include_dir.workspace = true
-open = "5.0.1"
+open.workspace = true
 
