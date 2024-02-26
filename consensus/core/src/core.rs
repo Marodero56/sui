@@ -281,10 +281,7 @@ impl Core {
             assert!(missing.is_empty());
 
             // 6. Ensure the new block and its ancestors are persisted, before broadcasting it.
-            self.dag_state
-                .write()
-                .flush()
-                .unwrap_or_else(|e| panic!("Failed to flush dag state: {e}"));
+            self.dag_state.write().flush();
 
             // 7. Signal that a new block is created, and broadcast it.
             let _ = self.signals.new_block_ready(verified_block.reference());

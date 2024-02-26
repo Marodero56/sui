@@ -105,7 +105,7 @@ impl BlockManager {
         let dag_state = self.dag_state.read();
 
         // If block has been already received and suspended, or already processed and stored, or is a genesis block, then skip it.
-        if self.suspended_blocks.contains_key(&block_ref) || dag_state.contains_block(&block_ref)? {
+        if self.suspended_blocks.contains_key(&block_ref) || dag_state.contains_block(&block_ref) {
             return Ok(None);
         }
 
@@ -113,7 +113,7 @@ impl BlockManager {
 
         // make sure that we have all the required ancestors in store
         for (found, ancestor) in dag_state
-            .contains_blocks(ancestors.to_vec())?
+            .contains_blocks(ancestors.to_vec())
             .into_iter()
             .zip(ancestors.iter())
         {

@@ -93,7 +93,7 @@ impl BaseCommitter {
         // (created by Byzantine leaders).
         let wave = self.wave_number(leader.round);
         let decision_round = self.decision_round(wave);
-        let leader_blocks = self.dag_state.read().get_uncommitted_blocks_at_slot(leader);
+        let leader_blocks = self.dag_state.read().get_blocks_at_slot(leader);
         let mut leaders_with_enough_support: Vec<_> = leader_blocks
             .into_iter()
             .filter(|l| self.enough_leader_support(decision_round, l))
@@ -201,7 +201,6 @@ impl BaseCommitter {
                 .dag_state
                 .read()
                 .get_block(ancestor)
-                .unwrap_or_else(|e| panic!("Error reading block: {}", e))
                 .unwrap_or_else(|| panic!("Block not found in storage: {:?}", ancestor));
             if let Some(support) = self.find_supported_block(leader_slot, &ancestor) {
                 return Some(support);
@@ -239,7 +238,6 @@ impl BaseCommitter {
                     .dag_state
                     .read()
                     .get_block(reference)
-                    .unwrap_or_else(|e| panic!("Error reading block: {}", e))
                     .unwrap_or_else(|| panic!("Block not found in storage: {:?}", reference));
                 let is_vote = self.is_vote(&potential_vote, leader_block);
                 all_votes.insert(*reference, is_vote);
@@ -270,10 +268,7 @@ impl BaseCommitter {
     fn decide_leader_from_anchor(&self, anchor: &VerifiedBlock, leader_slot: Slot) -> LeaderStatus {
         // Get the block(s) proposed by the leader. There could be more than one leader block
         // in the slot from a Byzantine authority.
-        let leader_blocks = self
-            .dag_state
-            .read()
-            .get_uncommitted_blocks_at_slot(leader_slot);
+        let leader_blocks = self.dag_state.read().get_blocks_at_slot(leader_slot);
 
         // TODO: Re-evaluate this check once we have a better way to handle/track byzantine authorities.
         if leader_blocks.len() > 1 {

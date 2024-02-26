@@ -10,7 +10,7 @@ mod store_tests;
 use consensus_config::AuthorityIndex;
 
 use crate::{
-    block::{BlockRef, Round, VerifiedBlock},
+    block::{BlockRef, Round, Slot, VerifiedBlock},
     commit::{Commit, CommitIndex},
     error::ConsensusResult,
 };
@@ -45,6 +45,9 @@ pub(crate) trait Store: Send + Sync {
         author: AuthorityIndex,
         num_of_rounds: u64,
     ) -> ConsensusResult<Vec<VerifiedBlock>>;
+
+    /// Reads all blocks in a slot.
+    fn scan_blocks_by_slot(&self, slot: Slot) -> ConsensusResult<Vec<VerifiedBlock>>;
 
     /// Reads the last commit.
     fn read_last_commit(&self) -> ConsensusResult<Option<Commit>>;

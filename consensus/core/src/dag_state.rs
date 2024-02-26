@@ -16,7 +16,6 @@ use crate::{
     block::{Block, BlockAPI, BlockDigest, BlockRef, Round, Slot, VerifiedBlock},
     commit::{Commit, CommitIndex},
     context::Context,
-    error::ConsensusResult,
     storage::Store,
 };
 
@@ -75,9 +74,13 @@ impl DagState {
             .map(|block| (block.reference(), block))
             .collect();
 
-        let last_commit = store.read_last_commit().unwrap();
+        let last_commit = store
+            .read_last_commit()
+            .unwrap_or_else(|e| panic!("Failed to read from storage: {:?}", e));
         let last_committed_rounds = {
-            let rounds = store.read_last_committed_rounds().unwrap();
+            let rounds = store
+                .read_last_committed_rounds()
+                .unwrap_or_else(|e| panic!("Failed to read from storage: {:?}", e));
             if rounds.is_empty() {
                 vec![0; num_authorities]
             } else {
@@ -103,7 +106,7 @@ impl DagState {
             let blocks = state
                 .store
                 .scan_blocks_by_author(authority_index, round.saturating_sub(CACHED_ROUNDS))
-                .unwrap();
+                .unwrap_or_else(|e| panic!("Failed to read from storage: {:?}", e));
             for block in blocks {
                 state.accept_block(block);
             }
@@ -120,7 +123,7 @@ impl DagState {
         // TODO: Move this check to core
         // Ensure we don't write multiple blocks per slot for our own index
         if block_ref.author == self.context.own_index {
-            let existing_blocks = self.get_uncommitted_blocks_at_slot(block_ref.into());
+            let existing_blocks = self.get_blocks_at_slot(block_ref.into());
             assert!(
                 existing_blocks.is_empty(),
                 "Block Rejected! Attempted to add block {block} to own slot where \
@@ -142,16 +145,13 @@ impl DagState {
 
     /// Gets blocks by checking cached recent blocks then storage.
     /// Returns None when the block is not found.
-    pub(crate) fn get_block(&self, reference: &BlockRef) -> ConsensusResult<Option<VerifiedBlock>> {
-        Ok(self.get_blocks(&[*reference])?.pop().unwrap())
+    pub(crate) fn get_block(&self, reference: &BlockRef) -> Option<VerifiedBlock> {
+        self.get_blocks(&[*reference]).pop().unwrap()
     }
 
     /// Gets blocks by checking cached recent blocks in memory then storage.
     /// An element is None when the corresponding block is not found.
-    pub(crate) fn get_blocks(
-        &self,
-        block_refs: &[BlockRef],
-    ) -> ConsensusResult<Vec<Option<VerifiedBlock>>> {
+    pub(crate) fn get_blocks(&self, block_refs: &[BlockRef]) -> Vec<Option<VerifiedBlock>> {
         let mut blocks = vec![None; block_refs.len()];
         let mut missing = Vec::new();
 
@@ -164,25 +164,28 @@ impl DagState {
         }
 
         if missing.is_empty() {
-            return Ok(blocks);
+            return blocks;
         }
 
         let missing_refs = missing
             .iter()
             .map(|(_, block_ref)| **block_ref)
             .collect::<Vec<_>>();
-        let store_results = self.store.read_blocks(&missing_refs)?;
+        let store_results = self
+            .store
+            .read_blocks(&missing_refs)
+            .unwrap_or_else(|e| panic!("Failed to read from storage: {:?}", e));
 
         for ((index, _), result) in missing.into_iter().zip(store_results.into_iter()) {
             blocks[index] = result;
         }
 
-        Ok(blocks)
+        blocks
     }
 
     /// Gets all uncommitted blocks in a slot.
     /// Uncommitted blocks must exist in memory, so only in-memory blocks are checked.
-    pub(crate) fn get_uncommitted_blocks_at_slot(&self, slot: Slot) -> Vec<VerifiedBlock> {
+    pub(crate) fn get_blocks_at_slot(&self, slot: Slot) -> Vec<VerifiedBlock> {
         // TODO: enable panic below.
         // let last_committed_round = self.last_committed_rounds[slot.authority];
         // if slot.round <= last_committed_round {
@@ -273,42 +276,45 @@ impl DagState {
             .collect()
     }
 
-    pub(crate) fn contains_block(&self, block_ref: &BlockRef) -> ConsensusResult<bool> {
-        let blocks = self.contains_blocks(vec![*block_ref])?;
-        Ok(blocks.first().cloned().expect("Result should be present"))
+    pub(crate) fn contains_block(&self, block_ref: &BlockRef) -> bool {
+        let blocks = self.contains_blocks(vec![*block_ref]);
+        blocks.first().cloned().unwrap()
     }
 
     /// Checks whether the required blocks are in cache, if exist, or otherwise will check in store. The method is not caching
     /// back the results, so its expensive if keep asking for cache missing blocks.
-    pub(crate) fn contains_blocks(&self, block_refs: Vec<BlockRef>) -> ConsensusResult<Vec<bool>> {
-        let mut blocks = vec![false; block_refs.len()];
+    pub(crate) fn contains_blocks(&self, block_refs: Vec<BlockRef>) -> Vec<bool> {
+        let mut exist = vec![false; block_refs.len()];
         let mut missing = Vec::new();
 
         for (index, block_ref) in block_refs.into_iter().enumerate() {
             if self.cached_refs[block_ref.author].contains(&block_ref)
                 || self.genesis.contains_key(&block_ref)
             {
-                blocks[index] = true;
+                exist[index] = true;
             } else {
                 missing.push((index, block_ref));
             }
         }
 
         if missing.is_empty() {
-            return Ok(blocks);
+            return exist;
         }
 
         let missing_refs = missing
             .iter()
             .map(|(_, block_ref)| *block_ref)
             .collect::<Vec<_>>();
-        let store_results = self.store.contains_blocks(&missing_refs)?;
+        let store_results = self
+            .store
+            .contains_blocks(&missing_refs)
+            .unwrap_or_else(|e| panic!("Failed to read from storage: {:?}", e));
 
         for ((index, _), result) in missing.into_iter().zip(store_results.into_iter()) {
-            blocks[index] = result;
+            exist[index] = result;
         }
 
-        Ok(blocks)
+        exist
     }
 
     pub(crate) fn highest_accepted_round(&self) -> Round {
@@ -371,11 +377,12 @@ impl DagState {
         }
     }
 
-    pub(crate) fn flush(&mut self) -> ConsensusResult<()> {
+    pub(crate) fn flush(&mut self) {
         let blocks = std::mem::take(&mut self.buffered_blocks);
         let commits = std::mem::take(&mut self.buffered_commits);
         self.store
             .write(blocks, commits, self.last_committed_rounds.clone())
+            .unwrap_or_else(|e| panic!("Failed to write to storage: {:?}", e));
     }
 
     /// Highest round where a block is committed, which is last commit's leader round.
@@ -434,7 +441,7 @@ mod test {
 
         // Check uncommitted blocks that exist.
         for (r, block) in &blocks {
-            assert_eq!(dag_state.get_block(r).unwrap(), Some(block.clone()));
+            assert_eq!(&dag_state.get_block(r).unwrap(), block);
         }
 
         // Check uncommitted blocks that do not exist.
@@ -445,7 +452,6 @@ mod test {
                 last_ref.author,
                 BlockDigest::MIN
             ))
-            .unwrap()
             .is_none());
 
         // Check slots with uncommitted blocks.
@@ -458,7 +464,7 @@ mod test {
                         .to_authority_index(author as usize)
                         .unwrap(),
                 );
-                let blocks = dag_state.get_uncommitted_blocks_at_slot(slot);
+                let blocks = dag_state.get_blocks_at_slot(slot);
 
                 // We only write one block per slot for own index
                 if AuthorityIndex::new_for_test(author) == own_index {
@@ -482,7 +488,7 @@ mod test {
 
         // Check slots without uncommitted blocks.
         let slot = Slot::new(non_existent_round, AuthorityIndex::ZERO);
-        assert!(dag_state.get_uncommitted_blocks_at_slot(slot).is_empty());
+        assert!(dag_state.get_blocks_at_slot(slot).is_empty());
 
         // Check rounds with uncommitted blocks.
         for round in 1..=num_rounds {
@@ -695,7 +701,7 @@ mod test {
             .iter()
             .map(|block| block.reference())
             .collect::<Vec<_>>();
-        let result = dag_state.contains_blocks(block_refs.clone()).unwrap();
+        let result = dag_state.contains_blocks(block_refs.clone());
 
         // Ensure everything is found
         let mut expected = vec![true; (num_rounds * num_authorities) as usize];
@@ -706,7 +712,7 @@ mod test {
             3,
             BlockRef::new(11, AuthorityIndex::new_for_test(3), BlockDigest::default()),
         );
-        let result = dag_state.contains_blocks(block_refs).unwrap();
+        let result = dag_state.contains_blocks(block_refs);
 
         // Then all should be found apart from the last one
         expected.insert(3, false);
@@ -747,7 +753,7 @@ mod test {
             .iter()
             .map(|block| block.reference())
             .collect::<Vec<_>>();
-        let result = dag_state.get_blocks(&block_refs).unwrap();
+        let result = dag_state.get_blocks(&block_refs);
 
         let mut expected = blocks
             .into_iter()
@@ -762,7 +768,7 @@ mod test {
             3,
             BlockRef::new(11, AuthorityIndex::new_for_test(3), BlockDigest::default()),
         );
-        let result = dag_state.get_blocks(&block_refs).unwrap();
+        let result = dag_state.get_blocks(&block_refs);
 
         // Then all should be found apart from the last one
         expected.insert(3, None);

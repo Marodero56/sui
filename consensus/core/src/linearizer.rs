@@ -59,7 +59,6 @@ impl Linearizer {
                         })
                         .collect::<Vec<_>>(),
                 )
-                .unwrap_or_else(|e| panic!("Failed to get ancestors: {:?}", e))
                 .into_iter()
                 .map(|ancestor_opt| {
                     ancestor_opt.expect("We should have all uncommitted blocks in dag state.")

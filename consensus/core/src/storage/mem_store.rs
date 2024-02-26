@@ -11,6 +11,7 @@ use consensus_config::AuthorityIndex;
 use parking_lot::RwLock;
 
 use super::Store;
+use crate::block::Slot;
 use crate::{
     block::{BlockDigest, BlockRef, Round, VerifiedBlock},
     commit::{Commit, CommitIndex},
@@ -140,6 +141,18 @@ impl Store for MemStore {
             blocks.push(
                 block.unwrap_or_else(|| panic!("Storage inconsistency: block {:?} not found!", r)),
             );
+        }
+        Ok(blocks)
+    }
+
+    fn scan_blocks_by_slot(&self, slot: Slot) -> ConsensusResult<Vec<VerifiedBlock>> {
+        let inner = self.inner.read();
+        let mut blocks = vec![];
+        for (_, block) in inner.blocks.range((
+            Included((slot.round, slot.authority, BlockDigest::MIN)),
+            Included((slot.round, slot.authority, BlockDigest::MAX)),
+        )) {
+            blocks.push(block.clone());
         }
         Ok(blocks)
     }

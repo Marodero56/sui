@@ -102,7 +102,7 @@ pub(crate) fn get_all_leader_blocks(
         for leader_offset in 0..num_leaders {
             if pipelined || round % wave_length == 0 {
                 let slot = Slot::new(round, leader_schedule.elect_leader(round, leader_offset));
-                let uncommitted_blocks = dag_state.read().get_uncommitted_blocks_at_slot(slot);
+                let uncommitted_blocks = dag_state.read().get_blocks_at_slot(slot);
                 blocks.extend(uncommitted_blocks);
             }
         }
