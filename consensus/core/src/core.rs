@@ -61,7 +61,9 @@ pub(crate) struct Core {
     signals: CoreSignals,
     /// The keypair to be used for block signing
     block_signer: ProtocolKeyPair,
-    /// The node's storage
+    /// Keeping track of state of the DAG, including blocks, commits and last committed rounds.
+    dag_state: Arc<RwLock<DagState>>,
+    /// The node's storage.
     store: Arc<dyn Store>,
 }
 
@@ -97,6 +99,7 @@ impl Core {
             commit_observer,
             signals,
             block_signer,
+            dag_state,
             store,
         }
         .recover(all_genesis_blocks)
@@ -143,18 +146,18 @@ impl Core {
             .try_accept_blocks(blocks)
             .unwrap_or_else(|err| panic!("Fatal error while accepting blocks: {err}"));
 
-        // Now add accepted blocks to the threshold clock and pending ancestors list.
-        self.add_accepted_blocks(accepted_blocks, None);
+        if !accepted_blocks.is_empty() {
+            // Now add accepted blocks to the threshold clock and pending ancestors list.
+            self.add_accepted_blocks(accepted_blocks, None);
 
-        // TODO: Add optimization for added blocks that do not achieve quorum for a round.
-        self.try_commit();
+            // TODO: Add optimization for added blocks that do not achieve quorum for a round.
+            self.try_commit();
+        }
 
         // Attempt to create a new block and broadcast it.
-        if let Some(block) = self.try_new_block(false) {
-            if let Err(e) = self.signals.new_block(block.clone()) {
-                warn!("Failed to broadcast block {}: {:?}", block, e);
-                // TODO: propagate shutdown or ensure this will never return error?
-            }
+        if self.try_new_block(false).is_some() {
+            // TODO: Add optimization for added blocks that do not achieve quorum for a round.
+            self.try_commit();
         }
 
         missing_blocks
@@ -212,10 +215,8 @@ impl Core {
         if self.last_proposed_round() < round {
             self.context.metrics.node_metrics.leader_timeout_total.inc();
             if let Some(block) = self.try_new_block(true) {
-                if let Err(e) = self.signals.new_block(block.clone()) {
-                    warn!("Failed to broadcast block {}: {:?}", block, e);
-                    // TODO: propagate shutdown or ensure this will never return error?
-                }
+                // TODO: Add optimization for added blocks that do not achieve quorum for a round.
+                self.try_commit();
                 return Some(block);
             }
         }
@@ -248,7 +249,6 @@ impl Core {
             let transactions = self.transaction_consumer.next();
 
             // 3. Create the block and insert to storage.
-            // TODO: take a decision on whether we want to flush to disk at this point the DagState.
             let block = Block::V1(BlockV1::new(
                 self.context.committee.epoch(),
                 clock_round,
@@ -265,15 +265,14 @@ impl Core {
             // Unnecessary to verify own blocks.
             let verified_block = VerifiedBlock::new_verified(signed_block, serialized);
 
-            //4. Add to the threshold clock
+            // 4. Add to the threshold clock and pending ancestors
             self.threshold_clock.add_block(verified_block.reference());
-
-            // Add to the pending ancestors
             self.pending_ancestors
                 .entry(verified_block.round())
                 .or_default()
                 .push(verified_block.clone());
 
+            // 5. Accept the block into BlockManager and DagState.
             let (accepted_blocks, missing) = self
                 .block_manager
                 .try_accept_blocks(vec![verified_block.clone()])
@@ -281,13 +280,22 @@ impl Core {
             assert_eq!(accepted_blocks.len(), 1);
             assert!(missing.is_empty());
 
-            self.last_proposed_block = verified_block.clone();
+            // 6. Ensure the new block and its ancestors are persisted, before broadcasting it.
+            self.dag_state
+                .write()
+                .flush()
+                .unwrap_or_else(|e| panic!("Failed to flush dag state: {e}"));
 
-            tracing::debug!("New block created {}", verified_block);
-
-            //5. emit an event that a new block is ready
+            // 7. Signal that a new block is created, and broadcast it.
             let _ = self.signals.new_block_ready(verified_block.reference());
+            if let Err(e) = self.signals.new_block(verified_block.clone()) {
+                warn!("Failed to broadcast block {}: {:?}", verified_block, e);
+                // TODO: propagate shutdown or ensure this will never return error?
+            }
             // TODO: propagate shutdown or ensure this will never return error?
+
+            self.last_proposed_block = verified_block.clone();
+            tracing::info!("Created block {}", verified_block);
 
             return Some(verified_block);
         }
@@ -531,7 +539,9 @@ mod test {
             last_round_blocks = this_round_blocks;
         }
         // write them in store
-        store.write(all_blocks, vec![]).expect("Storage error");
+        store
+            .write(all_blocks, vec![], vec![])
+            .expect("Storage error");
 
         // create dag state after all blocks have been written to store
         let dag_state = Arc::new(RwLock::new(DagState::new(context.clone(), store.clone())));
@@ -634,7 +644,9 @@ mod test {
         }
 
         // write them in store
-        store.write(all_blocks, vec![]).expect("Storage error");
+        store
+            .write(all_blocks, vec![], vec![])
+            .expect("Storage error");
 
         // create dag state after all blocks have been written to store
         let dag_state = Arc::new(RwLock::new(DagState::new(context.clone(), store.clone())));

@@ -87,9 +87,6 @@ impl Linearizer {
         committed_leaders: Vec<VerifiedBlock>,
     ) -> Vec<CommittedSubDag> {
         let mut committed_sub_dags = vec![];
-        let mut commits = vec![];
-        let mut committed_blocks = vec![];
-
         for leader_block in committed_leaders {
             // Grab latest commit state from dag state
             let dag_state = self.dag_state.read();
@@ -108,7 +105,7 @@ impl Linearizer {
             sub_dag.sort();
 
             // Update last commit in dag state
-            let last_commit_data = Commit {
+            let commit = Commit {
                 index: sub_dag.commit_index,
                 leader: sub_dag.leader,
                 blocks: sub_dag
@@ -122,18 +119,16 @@ impl Linearizer {
                     .collect::<Vec<_>>(),
                 last_committed_rounds,
             };
-            self.dag_state
-                .write()
-                .set_last_commit(last_commit_data.clone());
-            commits.push(last_commit_data);
-            committed_blocks.extend(sub_dag.blocks.clone());
+            self.dag_state.write().add_commit(commit.clone());
             committed_sub_dags.push(sub_dag);
         }
-        // TODO: Revisit this after refactor of dag state
-        if !commits.is_empty() {
-            self.dag_state
-                .write()
-                .write_commits(commits, committed_blocks);
+        // Committed blocks musted be persisted to storage before sending them to Sui and executing
+        // their transactions.
+        // Commit metadata can be persisted more lazily because they are recoverable. Uncommitted
+        // blocks can wait to persist too.
+        // But for simplicity, all unpersisted blocks and commits are flushed to storage.
+        if !committed_sub_dags.is_empty() {
+            self.dag_state.write().flush();
         }
         committed_sub_dags
     }
@@ -259,7 +254,7 @@ mod tests {
             blocks: blocks.clone(),
             last_committed_rounds,
         };
-        dag_state.write().set_last_commit(first_commit_data);
+        dag_state.write().add_commit(first_commit_data);
 
         blocks.clear();
         let leader_round_wave_2 = leader_round_wave_1 + wave_length;

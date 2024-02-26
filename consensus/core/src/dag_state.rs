@@ -10,6 +10,7 @@ use std::{
 };
 
 use consensus_config::AuthorityIndex;
+use tracing::error;
 
 use crate::{
     block::{Block, BlockAPI, BlockDigest, BlockRef, Round, Slot, VerifiedBlock},
@@ -45,11 +46,18 @@ pub(crate) struct DagState {
     // Each element in the Vec corresponds to the authority with the index.
     cached_refs: Vec<BTreeSet<BlockRef>>,
 
+    // Highest round of blocks accepted.
+    highest_accepted_round: Round,
+
     // Last consensus commit of the dag.
     last_commit: Option<Commit>,
 
-    // Highest round of blocks accepted.
-    highest_accepted_round: Round,
+    // Last committed rounds per authority.
+    last_committed_rounds: Vec<Round>,
+
+    // Buffered data to be flushed to storage.
+    buffered_blocks: Vec<VerifiedBlock>,
+    buffered_commits: Vec<Commit>,
 
     // Persistent storage for blocks, commits and other consensus data.
     store: Arc<dyn Store>,
@@ -60,11 +68,6 @@ impl DagState {
     /// Initializes DagState from storage.
     pub(crate) fn new(context: Arc<Context>, store: Arc<dyn Store>) -> Self {
         let num_authorities = context.committee.size();
-        let last_commit = store.read_last_commit().unwrap();
-        let last_committed_rounds = match &last_commit {
-            Some(commit) => commit.last_committed_rounds.clone(),
-            None => vec![0; num_authorities],
-        };
 
         let (_, genesis) = Block::genesis(context.clone());
         let genesis = genesis
@@ -72,13 +75,26 @@ impl DagState {
             .map(|block| (block.reference(), block))
             .collect();
 
+        let last_commit = store.read_last_commit().unwrap();
+        let last_committed_rounds = {
+            let rounds = store.read_last_committed_rounds().unwrap();
+            if rounds.is_empty() {
+                vec![0; num_authorities]
+            } else {
+                rounds
+            }
+        };
+
         let mut state = Self {
             context,
             genesis,
             recent_blocks: BTreeMap::new(),
             cached_refs: vec![BTreeSet::new(); num_authorities],
-            last_commit,
             highest_accepted_round: 0,
+            last_commit,
+            last_committed_rounds: last_committed_rounds.clone(),
+            buffered_blocks: vec![],
+            buffered_commits: vec![],
             store,
         };
 
@@ -111,9 +127,10 @@ impl DagState {
                 block(s) {existing_blocks:#?} already exists."
             );
         }
-        self.recent_blocks.insert(block_ref, block);
+        self.recent_blocks.insert(block_ref, block.clone());
         self.cached_refs[block_ref.author].insert(block_ref);
         self.highest_accepted_round = max(self.highest_accepted_round, block_round);
+        self.buffered_blocks.push(block);
     }
 
     /// Accepts a blocks into DagState and keeps it in memory.
@@ -123,13 +140,13 @@ impl DagState {
         }
     }
 
-    /// Gets blocks by checking the recent blocks cache then storage.
-    /// Returns None when a block is not found.
+    /// Gets blocks by checking cached recent blocks then storage.
+    /// Returns None when the block is not found.
     pub(crate) fn get_block(&self, reference: &BlockRef) -> ConsensusResult<Option<VerifiedBlock>> {
         Ok(self.get_blocks(&[*reference])?.pop().unwrap())
     }
 
-    /// Gets blocks by checking the recent blocks cache then storage.
+    /// Gets blocks by checking cached recent blocks in memory then storage.
     /// An element is None when the corresponding block is not found.
     pub(crate) fn get_blocks(
         &self,
@@ -166,7 +183,15 @@ impl DagState {
     /// Gets all uncommitted blocks in a slot.
     /// Uncommitted blocks must exist in memory, so only in-memory blocks are checked.
     pub(crate) fn get_uncommitted_blocks_at_slot(&self, slot: Slot) -> Vec<VerifiedBlock> {
-        // TODO: evauluate if we should panic `if slot.round <= last_commit_round`
+        // TODO: enable panic below.
+        // let last_committed_round = self.last_committed_rounds[slot.authority];
+        // if slot.round <= last_committed_round {
+        //     panic!(
+        //         "Slot {} is below the authority's last committed round {}!",
+        //         slot, last_committed_round
+        //     );
+        // }
+
         let mut blocks = vec![];
         for (block_ref, block) in self.recent_blocks.range((
             Included(BlockRef::new(slot.round, slot.authority, BlockDigest::MIN)),
@@ -177,6 +202,8 @@ impl DagState {
         blocks
     }
 
+    /// Gets all uncommitted blocks in a round.
+    /// Uncommitted blocks must exist in memory, so only in-memory blocks are checked.
     pub(crate) fn get_uncommitted_blocks_at_round(&self, round: Round) -> Vec<VerifiedBlock> {
         if round <= self.last_commit_round() {
             panic!("Round {} have committed blocks!", round);
@@ -288,15 +315,30 @@ impl DagState {
         self.highest_accepted_round
     }
 
-    // Write commits to store. Commits should be provided in commit order, meaning
-    // the last element in commits is the new last_commit.
-    pub(crate) fn add_commits(&mut self, commits: Vec<Commit>) {
-        assert!(!commits.is_empty());
-        let last_commit = commits.last().unwrap().clone();
-        self.set_last_commit(last_commit);
-        self.store
-            .write(vec![], commits)
-            .expect("Writing commits to store should not fail");
+    // Buffers a new commit in memory and updates last committed rounds.
+    // REQUIRED: must not skip over any commit index.
+    pub(crate) fn add_commit(&mut self, commit: Commit) {
+        if let Some(last_commit) = &self.last_commit {
+            if commit.index <= last_commit.index {
+                error!(
+                    "New commit index {} <= last commit index {}!",
+                    commit.index, last_commit.index
+                );
+                return;
+            }
+            // TODO: enable the stronger condition below.
+            assert_eq!(commit.index, last_commit.index + 1);
+        } else {
+            assert_eq!(commit.index, 1);
+        }
+        self.last_commit = Some(commit.clone());
+        for block_ref in commit.blocks.iter() {
+            self.last_committed_rounds[block_ref.author] = max(
+                self.last_committed_rounds[block_ref.author],
+                block_ref.round,
+            );
+        }
+        self.buffered_commits.push(commit);
     }
 
     /// Index of the last commit.
@@ -329,26 +371,11 @@ impl DagState {
         }
     }
 
-    // Write commits to store. Commits should be provided in commit order, meaning
-    // the last element in commits is the new last_commit.
-    pub(crate) fn write_commits(
-        &mut self,
-        commits: Vec<Commit>,
-        committed_blocks: Vec<VerifiedBlock>,
-    ) {
-        assert!(!commits.is_empty());
-        let last_commit = commits.last().unwrap().clone();
+    pub(crate) fn flush(&mut self) -> ConsensusResult<()> {
+        let blocks = std::mem::take(&mut self.buffered_blocks);
+        let commits = std::mem::take(&mut self.buffered_commits);
         self.store
-            .write(committed_blocks, commits)
-            .expect("Writing commits to store should not fail");
-        self.set_last_commit(last_commit);
-    }
-
-    pub(crate) fn set_last_commit(&mut self, commit: Commit) {
-        if let Some(last_commit) = &self.last_commit {
-            assert!(commit.index >= last_commit.index);
-        }
-        self.last_commit = Some(commit);
+            .write(blocks, commits, self.last_committed_rounds.clone())
     }
 
     /// Highest round where a block is committed, which is last commit's leader round.
@@ -656,7 +683,7 @@ mod test {
         // Now write in store the blocks from first 4 rounds and the rest to the dag state
         blocks.clone().into_iter().for_each(|block| {
             if block.round() <= 4 {
-                store.write(vec![block], vec![]).unwrap();
+                store.write(vec![block], vec![], vec![]).unwrap();
             } else {
                 dag_state.accept_blocks(vec![block]);
             }
@@ -708,7 +735,7 @@ mod test {
         // Now write in store the blocks from first 4 rounds and the rest to the dag state
         blocks.clone().into_iter().for_each(|block| {
             if block.round() <= 4 {
-                store.write(vec![block], vec![]).unwrap();
+                store.write(vec![block], vec![], vec![]).unwrap();
             } else {
                 dag_state.accept_blocks(vec![block]);
             }

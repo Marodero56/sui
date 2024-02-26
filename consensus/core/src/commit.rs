@@ -262,7 +262,7 @@ mod tests {
             })
             .map(|block| (block.reference(), block))
             .unzip();
-        store.write(genesis, vec![]).unwrap();
+        store.write(genesis, vec![], vec![]).unwrap();
         blocks.append(&mut genesis_references.clone());
 
         let mut ancestors = genesis_references;
@@ -277,7 +277,7 @@ mod tests {
                         .set_ancestors(ancestors.clone())
                         .build(),
                 );
-                store.write(vec![block.clone()], vec![]).unwrap();
+                store.write(vec![block.clone()], vec![], vec![]).unwrap();
                 new_ancestors.push(block.reference());
                 blocks.push(block.reference());
 
