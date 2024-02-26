@@ -2,16 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::displays::{Pretty, PrettyM};
-use move_binary_format::CompiledModule;
-use move_bytecode_utils::module_cache::GetModule;
 use move_core_types::annotated_value::{MoveTypeLayout, MoveValue};
-use move_core_types::language_storage::{ModuleId, TypeTag};
+use move_core_types::language_storage::TypeTag;
 use std::fmt::{Display, Formatter};
-
-use sui_types::base_types::ObjectID;
-use sui_types::error::SuiResult;
 use sui_types::execution_mode::ExecutionResult;
-use sui_types::storage::{BackingPackageStore, PackageObject};
 use sui_types::transaction::CallArg::Pure;
 use sui_types::transaction::{
     write_sep, Argument, CallArg, Command, ObjectArg, ProgrammableMoveCall, ProgrammableTransaction,
@@ -94,10 +88,10 @@ impl<'a> Display for PrettyM<'a, FullPTB> {
         for ((i, c), result) in commands.iter().enumerate().zip(results) {
             if i == commands.len() - 1 {
                 builder.push_record(vec![format!("{i:<2} {}", Pretty(c),)]);
-                display_result(f, result.clone(), layout_resolver)?;
+                //display_result(f, result.clone(), layout_resolver)?;
             } else {
                 builder.push_record(vec![format!("{i:<2} {}\n", Pretty(c),)]);
-                display_result(f, result.clone(), layout_resolver)?;
+                //display_result(f, result.clone(), layout_resolver)?;
             }
         }
         let mut table = builder.build();

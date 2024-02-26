@@ -142,6 +142,7 @@ pub struct ProtocolVersionSummary {
     pub epoch_change_tx: TransactionDigest,
 }
 
+#[derive(Clone)]
 pub struct Storage {
     /// These are objects at the frontier of the execution's view
     /// They might not be the latest object currently but they are the latest objects
@@ -212,6 +213,7 @@ impl Storage {
     }
 }
 
+#[derive(Clone)]
 pub struct LocalExec {
     pub client: Option<SuiClient>,
     // For a given protocol version, what TX created it, and what is the valid range of epochs
@@ -780,27 +782,28 @@ impl LocalExec {
 
         trace!(target: "replay_gas_info", "{}", Pretty(&gas_status));
 
-        let cache = PassthroughCache::new_with_no_metrics(/* need an AuthorityStore */);
-        let mut layout_resolver = executor.type_layout_resolver(Box::new(cache));
+        let backing_store = self.clone();
+        let e: Arc<dyn Executor> = executor.clone();
+        let layout_resolver = e.type_layout_resolver(Box::new(backing_store));
 
         let skip_checks = true;
         if let ProgrammableTransaction(ref pt) = transaction_kind {
             trace!(target: "replay_ptb_info", "{}", PrettyM(&mut FullPTB { ptb: pt.clone(), results: executor.dev_inspect_transaction(&self, protocol_config,
-                 metrics,
-                 expensive_checks,
-                 &certificate_deny_set,
-                &tx_info.executed_epoch,
-                 epoch_start_timestamp,
-                 CheckedInputObjects::new_for_replay(input_objects),
-                 tx_info.gas.clone(),
-                 SuiGasStatus::new(tx_info.gas_budget, tx_info.gas_price, rgp, protocol_config)?,
-                 transaction_kind.clone(),
-                 tx_info.sender,
-                 *tx_digest,
-                 skip_checks
-             ).3.unwrap_or_else(|e| panic!("Error executing this transaction in dev-inspect mode, {e}")),
-            layout_resolver
-             }))
+                metrics,
+                expensive_checks,
+                &certificate_deny_set,
+               &tx_info.executed_epoch,
+                epoch_start_timestamp,
+                CheckedInputObjects::new_for_replay(input_objects),
+                tx_info.gas.clone(),
+                SuiGasStatus::new(tx_info.gas_budget, tx_info.gas_price, rgp, protocol_config)?,
+                transaction_kind.clone(),
+                tx_info.sender,
+                *tx_digest,
+                skip_checks
+            ).3.unwrap_or_else(|e| panic!("Error executing this transaction in dev-inspect mode, {e}")),
+                layout_resolver,
+            }))
         };
 
         let all_required_objects = self.storage.all_objects();
