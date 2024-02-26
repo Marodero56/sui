@@ -430,8 +430,8 @@ module sui::test_scenario_tests {
         {
 
             let parent = ts::take_from_sender_by_id<Object>(&scenario, id1);
-            let t2 = ts::get_receiving_ticket_for_object_by_id<Object>(id2);
-            let t3 = ts::get_receiving_ticket_for_object_by_id<Object>(id3);
+            let t2 = ts::receiving_ticket_for_child_object_by_id<Object>(id2);
+            let t3 = ts::receiving_ticket_for_child_object_by_id<Object>(id3);
             let obj2 = transfer::receive(&mut parent.id, t2);
             let obj3 = transfer::receive(&mut parent.id, t3);
             assert!(parent.value == 10, EValueMismatch);
@@ -462,7 +462,7 @@ module sui::test_scenario_tests {
         {
 
             let parent = ts::take_from_sender_by_id<Object>(&scenario, id1);
-            let t2 = ts::get_receiving_ticket_for_object<Object>(&id1);
+            let t2 = ts::receiving_ticket_for_most_recent_child_object<Object>(&id1);
             let obj2 = transfer::receive(&mut parent.id, t2);
             assert!(parent.value == 10, EValueMismatch);
             assert!(obj2.value == 20, EValueMismatch);
@@ -485,7 +485,7 @@ module sui::test_scenario_tests {
         };
         ts::next_tx(&mut scenario, sender);
         {
-            let _t2 = ts::get_receiving_ticket_for_object_by_id<Object>(id1);
+            let _t2 = ts::receiving_ticket_for_child_object_by_id<Object>(id1);
         };
         ts::end(scenario);
     }
@@ -503,8 +503,8 @@ module sui::test_scenario_tests {
         };
         ts::next_tx(&mut scenario, sender);
         {
-            let _t2 = ts::get_receiving_ticket_for_object_by_id<Object>(id1);
-            let _t2 = ts::get_receiving_ticket_for_object_by_id<Object>(id1);
+            let _t2 = ts::receiving_ticket_for_child_object_by_id<Object>(id1);
+            let _t2 = ts::receiving_ticket_for_child_object_by_id<Object>(id1);
         };
         ts::end(scenario);
     }
@@ -522,8 +522,8 @@ module sui::test_scenario_tests {
         };
         ts::next_tx(&mut scenario, sender);
         {
-            let _t2 = ts::get_receiving_ticket_for_object_by_id<Object>(id1);
-            let _t2 = ts::get_receiving_ticket_for_object_by_id<Object>(id1);
+            let _t2 = ts::receiving_ticket_for_child_object_by_id<Object>(id1);
+            let _t2 = ts::receiving_ticket_for_child_object_by_id<Object>(id1);
         };
         ts::end(scenario);
     }
@@ -540,9 +540,9 @@ module sui::test_scenario_tests {
         };
         ts::next_tx(&mut scenario, sender);
         {
-            let t2 = ts::get_receiving_ticket_for_object_by_id<Object>(id1);
+            let t2 = ts::receiving_ticket_for_child_object_by_id<Object>(id1);
             ts::return_receiving_ticket(t2);
-            let _t2 = ts::get_receiving_ticket_for_object_by_id<Object>(id1);
+            let _t2 = ts::receiving_ticket_for_child_object_by_id<Object>(id1);
         };
         ts::end(scenario);
     }
@@ -570,10 +570,10 @@ module sui::test_scenario_tests {
         {
 
             let parent = ts::take_from_sender_by_id<Object>(&scenario, id1);
-            let t2 = ts::get_receiving_ticket_for_object_by_id<Object>(id2);
+            let t2 = ts::receiving_ticket_for_child_object_by_id<Object>(id2);
             ts::return_receiving_ticket(t2);
-            let t2 = ts::get_receiving_ticket_for_object_by_id<Object>(id2);
-            let t3 = ts::get_receiving_ticket_for_object_by_id<Object>(id3);
+            let t2 = ts::receiving_ticket_for_child_object_by_id<Object>(id2);
+            let t3 = ts::receiving_ticket_for_child_object_by_id<Object>(id3);
             let obj2 = transfer::receive(&mut parent.id, t2);
             let obj3 = transfer::receive(&mut parent.id, t3);
             assert!(parent.value == 10, EValueMismatch);
@@ -609,10 +609,10 @@ module sui::test_scenario_tests {
         {
 
             let parent = ts::take_from_sender_by_id<Object>(&scenario, id1);
-            let t2 = ts::get_receiving_ticket_for_object_by_id<Object>(id2);
+            let t2 = ts::receiving_ticket_for_child_object_by_id<Object>(id2);
             ts::return_receiving_ticket(t2);
-            let t2 = ts::get_receiving_ticket_for_object_by_id<Object>(id2);
-            let t3 = ts::get_receiving_ticket_for_object_by_id<Object>(id3);
+            let t2 = ts::receiving_ticket_for_child_object_by_id<Object>(id2);
+            let t3 = ts::receiving_ticket_for_child_object_by_id<Object>(id3);
             let obj2 = transfer::receive(&mut parent.id, t2);
             let obj3 = transfer::receive(&mut parent.id, t3);
             assert!(parent.value == 10, EValueMismatch);
@@ -652,8 +652,8 @@ module sui::test_scenario_tests {
         };
         ts::next_tx(&mut scenario, sender);
         {
-            let _t2 = ts::get_receiving_ticket_for_object_by_id<Object>(id2);
-            let _t3 = ts::get_receiving_ticket_for_object_by_id<Object>(id3);
+            let _t2 = ts::receiving_ticket_for_child_object_by_id<Object>(id2);
+            let _t3 = ts::receiving_ticket_for_child_object_by_id<Object>(id3);
         };
         ts::end(scenario);
     }
