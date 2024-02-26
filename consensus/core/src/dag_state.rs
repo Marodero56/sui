@@ -37,13 +37,13 @@ pub(crate) struct DagState {
     // The genesis blocks
     genesis: BTreeMap<BlockRef, VerifiedBlock>,
 
-    // Caches blocks within CACHED_ROUNDS from the last committed round per authority.
-    // Note: uncommitted blocks will always be in memory.
+    // Contains recent blocks within CACHED_ROUNDS from the last committed round per authority.
+    // Note: all uncommitted blocks are kept in memory.
     recent_blocks: BTreeMap<BlockRef, VerifiedBlock>,
 
-    // Accepted blocks have their refs cached. Cached refs are never removed until restart.
+    // Contains block refs of recent_blocks.
     // Each element in the Vec corresponds to the authority with the index.
-    cached_refs: Vec<BTreeSet<BlockRef>>,
+    recent_refs: Vec<BTreeSet<BlockRef>>,
 
     // Highest round of blocks accepted.
     highest_accepted_round: Round,
@@ -92,7 +92,7 @@ impl DagState {
             context,
             genesis,
             recent_blocks: BTreeMap::new(),
-            cached_refs: vec![BTreeSet::new(); num_authorities],
+            recent_refs: vec![BTreeSet::new(); num_authorities],
             highest_accepted_round: 0,
             last_commit,
             last_committed_rounds: last_committed_rounds.clone(),
@@ -108,7 +108,7 @@ impl DagState {
                 .scan_blocks_by_author(authority_index, round.saturating_sub(CACHED_ROUNDS))
                 .unwrap_or_else(|e| panic!("Failed to read from storage: {:?}", e));
             for block in blocks {
-                state.accept_block(block);
+                state.update_block_metadata(&block);
             }
         }
 
@@ -117,23 +117,37 @@ impl DagState {
 
     /// Accepts a block into DagState and keeps it in memory.
     pub(crate) fn accept_block(&mut self, block: VerifiedBlock) {
+        assert_ne!(
+            block.round(),
+            0,
+            "Genesis block should not be accepted into DAG."
+        );
+
         let block_ref = block.reference();
-        let block_round = block.round();
+        if self.contains_block(&block_ref) {
+            return;
+        }
 
         // TODO: Move this check to core
         // Ensure we don't write multiple blocks per slot for our own index
         if block_ref.author == self.context.own_index {
-            let existing_blocks = self.get_blocks_at_slot(block_ref.into());
+            let existing_blocks = self.get_uncommitted_blocks_at_slot(block_ref.into());
             assert!(
                 existing_blocks.is_empty(),
                 "Block Rejected! Attempted to add block {block} to own slot where \
                 block(s) {existing_blocks:#?} already exists."
             );
         }
-        self.recent_blocks.insert(block_ref, block.clone());
-        self.cached_refs[block_ref.author].insert(block_ref);
-        self.highest_accepted_round = max(self.highest_accepted_round, block_round);
+        self.update_block_metadata(&block);
         self.buffered_blocks.push(block);
+    }
+
+    /// Updates internal metadata for a block.
+    fn update_block_metadata(&mut self, block: &VerifiedBlock) {
+        let block_ref = block.reference();
+        self.recent_blocks.insert(block_ref, block.clone());
+        self.recent_refs[block_ref.author].insert(block_ref);
+        self.highest_accepted_round = max(self.highest_accepted_round, block.round());
     }
 
     /// Accepts a blocks into DagState and keeps it in memory.
@@ -185,15 +199,9 @@ impl DagState {
 
     /// Gets all uncommitted blocks in a slot.
     /// Uncommitted blocks must exist in memory, so only in-memory blocks are checked.
-    pub(crate) fn get_blocks_at_slot(&self, slot: Slot) -> Vec<VerifiedBlock> {
-        // TODO: enable panic below.
-        // let last_committed_round = self.last_committed_rounds[slot.authority];
-        // if slot.round <= last_committed_round {
-        //     panic!(
-        //         "Slot {} is below the authority's last committed round {}!",
-        //         slot, last_committed_round
-        //     );
-        // }
+    pub(crate) fn get_uncommitted_blocks_at_slot(&self, slot: Slot) -> Vec<VerifiedBlock> {
+        // TODO: either panic below when the slot is below the last committed round,
+        // or support reading from storage and limit storage usage only to edge cases.
 
         let mut blocks = vec![];
         for (block_ref, block) in self.recent_blocks.range((
@@ -227,8 +235,7 @@ impl DagState {
     }
 
     /// Gets all ancestors in the history of a block at a certain round.
-    /// The round must be higher than the last committed round.
-    pub(crate) fn ancestors_at_uncommitted_round(
+    pub(crate) fn ancestors_at_round(
         &self,
         later_block: &VerifiedBlock,
         earlier_round: Round,
@@ -253,8 +260,8 @@ impl DagState {
                 break;
             }
             let block_ref = linked.pop_last().unwrap();
-            let Some(block) = self.recent_blocks.get(&block_ref) else {
-                panic!("Block {:?} should be available in memory!", block_ref);
+            let Some(block) = self.get_block(&block_ref) else {
+                panic!("Block {:?} should exist in DAG!", block_ref);
             };
             linked.extend(block.ancestors().iter().cloned());
         }
@@ -268,9 +275,8 @@ impl DagState {
                 Unbounded,
             ))
             .map(|r| {
-                self.recent_blocks
-                    .get(r)
-                    .unwrap_or_else(|| panic!("Block {:?} should be available in memory!", r))
+                self.get_block(r)
+                    .unwrap_or_else(|| panic!("Block {:?} should exist in DAG!", r))
                     .clone()
             })
             .collect()
@@ -288,7 +294,7 @@ impl DagState {
         let mut missing = Vec::new();
 
         for (index, block_ref) in block_refs.into_iter().enumerate() {
-            if self.cached_refs[block_ref.author].contains(&block_ref)
+            if self.recent_refs[block_ref.author].contains(&block_ref)
                 || self.genesis.contains_key(&block_ref)
             {
                 exist[index] = true;
@@ -464,7 +470,7 @@ mod test {
                         .to_authority_index(author as usize)
                         .unwrap(),
                 );
-                let blocks = dag_state.get_blocks_at_slot(slot);
+                let blocks = dag_state.get_uncommitted_blocks_at_slot(slot);
 
                 // We only write one block per slot for own index
                 if AuthorityIndex::new_for_test(author) == own_index {
@@ -488,7 +494,7 @@ mod test {
 
         // Check slots without uncommitted blocks.
         let slot = Slot::new(non_existent_round, AuthorityIndex::ZERO);
-        assert!(dag_state.get_blocks_at_slot(slot).is_empty());
+        assert!(dag_state.get_uncommitted_blocks_at_slot(slot).is_empty());
 
         // Check rounds with uncommitted blocks.
         for round in 1..=num_rounds {
@@ -650,7 +656,7 @@ mod test {
         }
 
         // Check ancestors connected to anchor.
-        let ancestors = dag_state.ancestors_at_uncommitted_round(&anchor, 11);
+        let ancestors = dag_state.ancestors_at_round(&anchor, 11);
         let mut ancestors_refs: Vec<BlockRef> = ancestors.iter().map(|b| b.reference()).collect();
         ancestors_refs.sort();
         let mut expected_refs = vec![

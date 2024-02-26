@@ -16,7 +16,6 @@ use typed_store::{
 };
 
 use super::Store;
-use crate::block::Slot;
 use crate::{
     block::{BlockDigest, BlockRef, Round, SignedBlock, VerifiedBlock},
     commit::{Commit, CommitIndex},
@@ -200,23 +199,6 @@ impl Store for RocksDBStore {
             blocks.push(
                 block.unwrap_or_else(|| panic!("Storage inconsistency: block {:?} not found!", r)),
             );
-        }
-        Ok(blocks)
-    }
-
-    fn scan_blocks_by_slot(&self, slot: Slot) -> ConsensusResult<Vec<VerifiedBlock>> {
-        let mut blocks = vec![];
-        for r in self.blocks.safe_range_iter((
-            Included((slot.round, slot.authority, BlockDigest::MIN)),
-            Included((slot.round, slot.authority, BlockDigest::MAX)),
-        )) {
-            let ((r, index, digest), serialized) = r?;
-            let key = BlockRef::new(r, index, digest);
-            let signed_block: SignedBlock =
-                bcs::from_bytes(&serialized).map_err(ConsensusError::MalformedBlock)?;
-            let block = VerifiedBlock::new_verified(signed_block, serialized);
-            assert_eq!(key, block.reference());
-            blocks.push(block.clone());
         }
         Ok(blocks)
     }
