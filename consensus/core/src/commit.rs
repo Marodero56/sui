@@ -30,7 +30,7 @@ pub(crate) type CommitIndex = u64;
 
 /// Specifies one consensus commit.
 /// It is stored on disk, so it does not contain blocks which are stored individually.
-#[allow(unused)]
+// TODO: store internal data in a refcounted and versioned struct. Remove last_committed_rounds.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct Commit {
     /// Index of the commit.

@@ -289,7 +289,6 @@ impl Core {
                 warn!("Failed to broadcast block {}: {:?}", verified_block, e);
                 // TODO: propagate shutdown or ensure this will never return error?
             }
-            // TODO: propagate shutdown or ensure this will never return error?
 
             self.last_proposed_block = verified_block.clone();
             tracing::info!("Created block {}", verified_block);

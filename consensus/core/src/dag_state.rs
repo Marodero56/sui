@@ -338,7 +338,6 @@ impl DagState {
                 );
                 return;
             }
-            // TODO: enable the stronger condition below.
             assert_eq!(commit.index, last_commit.index + 1);
         } else {
             assert_eq!(commit.index, 1);
@@ -383,12 +382,33 @@ impl DagState {
         }
     }
 
+    /// After each flush, DagState becomes persisted in storage and it expected to recover
+    /// all internal states from stroage after restarts.
     pub(crate) fn flush(&mut self) {
+        // Flush buffered data to storage.
         let blocks = std::mem::take(&mut self.buffered_blocks);
         let commits = std::mem::take(&mut self.buffered_commits);
+        if blocks.is_empty() && commits.is_empty() {
+            return;
+        }
         self.store
             .write(blocks, commits, self.last_committed_rounds.clone())
             .unwrap_or_else(|e| panic!("Failed to write to storage: {:?}", e));
+        // Clean up old cached data. After flushing, all cached blocks are guaranteed to be persisted.
+        for (authority_refs, last_committed_round) in self
+            .recent_refs
+            .iter_mut()
+            .zip(self.last_committed_rounds.iter())
+        {
+            while let Some(block_ref) = authority_refs.first() {
+                if block_ref.round < last_committed_round.saturating_sub(CACHED_ROUNDS) {
+                    self.recent_blocks.remove(block_ref);
+                    authority_refs.pop_first();
+                } else {
+                    break;
+                }
+            }
+        }
     }
 
     /// Highest round where a block is committed, which is last commit's leader round.
