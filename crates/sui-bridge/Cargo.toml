@@ -57,6 +57,9 @@ sui-test-transaction-builder.workspace = true
 test-cluster.workspace = true
 hex-literal = "0.3.4"
 
+[build-dependencies]
+forge = { git = "https://github.com/foundry-rs/foundry.git", rev = "474591aa1e6922a0d5691ae1e2dcc355d8fcb92d", package = "forge"}
+
 [[bin]]
 name = "sui-bridge-cli"
 path = "src/tools/cli.rs"
